@@ -25,7 +25,6 @@ library(glmnet)
 library(doParallel)
 library(corrplot)
 library(car)
-library(gridExtra)
 knitr::opts_chunk$set(echo = FALSE)
 knitr::opts_chunk$set(fig.width=5, fig.height=3, fig.align="center") 
 dataset = read.csv("spotify_songs.csv", header=TRUE)
@@ -389,20 +388,18 @@ visualization_data = data.frame(
 )
 
 # Scatter plot of Actual vs. Predicted
-actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
   geom_point(alpha = 0.6, color = "blue") +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
   theme_minimal()
 
 # Residuals plot
-residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
   geom_point(alpha = 0.6, color = "green") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  labs(title = "Residuals Plot", x = "Predicted Values", y = "Residuals") +
   theme_minimal()
-
-grid.arrange(actualvpredplt, residualsplt, ncol = 2)
 
 #print summary
 model_summary <- as.data.frame(summary(model)$coefficients)
@@ -550,20 +547,18 @@ visualization_data = data.frame(
 )
 
 # Scatter plot of Actual vs. Predicted
-actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
   geom_point(alpha = 0.6, color = "blue") +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
   theme_minimal()
 
 # Residuals plot
-residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
   geom_point(alpha = 0.6, color = "green") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  labs(title = "Residuals Plot", x = "Predicted Values", y = "Residuals") +
   theme_minimal()
-
-grid.arrange(actualvpredplt, residualsplt, ncol = 2)
 ```
 
 The MSE is slightly higher and R\^2 value is slightly lower than with
@@ -646,20 +641,18 @@ visualization_data = data.frame(
 )
 
 # Scatter plot of Actual vs. Predicted
-actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
   geom_point(alpha = 0.6, color = "blue") +
   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
   theme_minimal()
 
 # Residuals plot
-residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
   geom_point(alpha = 0.6, color = "green") +
   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  labs(title = "Residuals Plot", x = "Predicted Values", y = "Residuals") +
   theme_minimal()
-
-grid.arrange(actualvpredplt, residualsplt, ncol = 2)
 ```
 
 Above is a snapshot of the results from using the 5 features with top
@@ -700,7 +693,7 @@ the case that if other more impact features are present in the dataset,
 linear regression can produce a better predictor than non-linear
 alternative.
 
-# Discussion
+# Further Discussion
 
 The limitation of our dataset is that it's missing key factors that
 could have a huge impact on a song's popularity such as the artist's
@@ -716,8 +709,9 @@ values from our random forest models can be useful in determining what
 features might influence the popularity of a song. From our tests, we
 found that the duration of the song, tempo, loudness, and/or energy
 might be one of those features. Producers can use this to notice trends
-at a smaller scale. For example, someone might reuse this code and
-instead use the release date data to filter out songs from a specific
-season like summer and find whether people prefer upbeat songs in the
-the summer or not. That is useful for producers looking to promote their
-songs over the summer as they see fit.
+at a smaller scale. For example, someone might [reuse this
+code](https://github.com/zcj77/spotify_project_stat151a/blob/main/project_stat151a.Rmd)
+and instead use the release date data to filter out songs from a
+specific season like summer and find whether people prefer upbeat songs
+in the the summer or not. That is useful for producers looking to
+promote their songs over the summer as they see fit.
