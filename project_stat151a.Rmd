@@ -1,0 +1,723 @@
+---
+title: "Final project"
+date: "2024-05-01"
+#bibliography: references.bib
+output:
+  bookdown::html_document2: default
+  bookdown::pdf_document2: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE, message=FALSE}
+# Please do not show your code in the document unless it helps the
+# reader understand something important.  Set include=FALSE to suppress
+# R code.
+library(tidyverse)
+library(knitr)
+library(caret)
+library(Metrics)
+library(randomForest)
+library(ggplot2)
+library(lmtest)
+library(glmnet)
+library(doParallel)
+library(corrplot)
+library(car)
+library(gridExtra)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.width=5, fig.height=3, fig.align="center") 
+dataset = read.csv("spotify_songs.csv", header=TRUE)
+```
+
+# Introduction
+
+Our project is about figuring out how to predict the popularity of songs
+on Spotify using features like energy, valence, and danceability. We
+want to create a tool that lets producers predict how popular their new
+songs would become, given the song's metadata. To do this, we’ll analyze
+song data to see which features are the best predictors of popularity
+and use that to allow producers to decide whether a song would be worth
+heavily marketed for.
+
+The goal is enable producers to allocate their marketing budget more
+accurately depending on how popular they anticipate their new songs to
+be.
+
+## Problem Description
+
+Our main question is: How can we use this Spotify data to help music
+producers allocate their marketing budget more effectively? This tool is
+important because it saves producers money and time with each of their
+newly released song.
+
+Based on our analysis, we’ll identify which song characteristics are
+most tied to its popularity and use these to train a model.
+
+# Data
+
+We get the dataset from our class webiste, where it was uploaded by the
+professor. It contains approximately 30,000 songs sourced from the
+Spotify API, with black-box machine learning quantifications of musical
+features such as energy, danceability, and valence—key variables for our
+analysis. However, the dataset does not specify how the tracks were
+sampled, which may limit the generalizability of our findings to all
+Spotify songs. Despite this, the dataset’s size and detailed feature set
+make it suitable for our goal of predicting song mood and generating
+mood-based playlists. For further context on Spotify’s feature
+quantification,refer to Spotify Developer Documentation and related
+studies like @mckay:2006:music.
+
+## Missing Values
+
+To analyze missing values in the dataset, we checked each column for
+missing entries and identified rows containing them.
+
+```{r missingvalues, echo=FALSE, message=FALSE}
+#find missing rows
+missing_rows = dataset[rowSums(is.na(dataset)) > 0, 
+                            c("track_id", "track_name", "track_artist", "track_album_name")]
+missing_rows = cbind(row_number = rownames(missing_rows), missing_rows)
+knitr::kable(missing_rows, caption = "Summary of Missing Rows", font_size = 10, full_width = FALSE)
+```
+
+## Unusual values
+
+The dataset contains 32,833 rows in total, with 28,356 unique track_id
+values and 22,545 unique track_album_id values. This shows that some
+tracks and albums appear across multiple rows. Below is a summary of the
+number of duplicate entries and an analysis of tracks associated with
+multiple playlists.
+
+```{r unusualvalues, echo=FALSE, message=FALSE}
+#summary of duplicates
+summary_duplicates = data.frame(
+  Metric = c("Total Rows", "Unique Album IDs", "Unique Track IDs", 
+             "Duplicated Album IDs", "Duplicated Track IDs"),
+  Value = c(
+    nrow(dataset),
+    length(unique(dataset$track_album_id)),
+    length(unique(dataset$track_id)),
+    nrow(dataset) - length(unique(dataset$track_album_id)),
+    nrow(dataset) - length(unique(dataset$track_id))
+  )
+)
+#knitr::kable(summary_duplicates, caption = "Summary of Duplicates in the Dataset", font_size = 10, full_width = FALSE)
+
+#duplicates in multiple playlists
+playlist_duplicates = dataset %>%
+  group_by(track_id) %>%
+  summarize(
+    unique_playlists = n_distinct(playlist_name),
+    unique_genres = n_distinct(playlist_genre)
+  ) %>%
+  filter(unique_playlists > 1) %>%
+  head()
+
+#knitr::kable(playlist_duplicates, caption = "Tracks Appearing in Multiple Playlists", font_size = 10, full_width = FALSE)
+```
+
+## Data Cleaning
+
+To clean the dataset, we handled missing values and duplicates
+carefully. For missing data in track_name, track_album_name, and
+track_artist, we didn’t drop rows since each song can still be uniquely
+identified by its track_id. We also found 10,299 duplicate
+track_album_id values and 4,477 duplicate track_id values. Because
+track_id has fewer duplicates, we used it as the main identifier.
+
+To handle duplicates in the dataset, we chose to calculate the mean of
+popularity related variables and others for each unique track_id. This
+approach ensures the most relevant information about each track’s
+popularity while resolving redundancies caused by duplicates. In
+addition, we can maintain the dataset’s quality and consistency for
+analysis and prediction.
+
+```{r datacleaning, echo=FALSE, message=FALSE}
+#using mean of features
+spotify_cleaned = dataset %>%
+  group_by(track_id) %>%
+  summarize(
+    track_popularity = mean(track_popularity, na.rm = TRUE),
+    valence = mean(valence, na.rm = TRUE),
+    energy = mean(energy, na.rm = TRUE),
+    danceability = mean(danceability, na.rm = TRUE),
+    loudness = mean(loudness, na.rm = TRUE),
+    speechiness = mean(speechiness, na.rm = TRUE),
+    acousticness = mean(acousticness, na.rm = TRUE),
+    instrumentalness = mean(instrumentalness, na.rm = TRUE),
+    liveness = mean(liveness, na.rm = TRUE),
+    tempo = mean(tempo, na.rm = TRUE),
+    key = mean(key, na.rm = TRUE),
+    duration_ms = mean(duration_ms, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+#summarize the original dataset
+original_summary = summary(dataset[, c("track_popularity", "valence", "energy", 
+                                       "danceability", "loudness", "speechiness", 
+                                       "acousticness", "instrumentalness", 
+"liveness", "tempo", "key", "duration_ms")])
+
+#Summarize the cleaned dataset
+cleaned_summary = summary(spotify_cleaned[, c("track_popularity", "valence", 
+                                              "energy", "danceability", 
+                                              "loudness", "speechiness", 
+                                              "acousticness", "instrumentalness", 
+                                              "liveness", "tempo", "key", 
+                                              "duration_ms")])
+#print(original_summary)
+#knitr::kable(cleaned_summary, caption = "Summary of Cleaned Dataset")
+```
+
+### Data Scaling & One-Hot Encoding
+
+To ensure consistency and improve model performance, we scaled all the
+variables except the key feature we are using normalization. Scaling
+adjusts each variable to have a mean of 0 and a standard deviation of 1,
+and we one hot the key values instead because it's a categorical column.
+If we left the key column as it was, it would imply a linear
+relationship between each key and also indicate that one key is better
+than the other as these key values are denoted as integers.
+
+```{r scaling one-hot encoding, echo=FALSE, message=FALSE}
+# one hot key values
+keys <- c('Key_C', 'Key_CD', 'Key_D', 'Key_DE', 'Key_E', 'Key_F', 
+          'Key_FG', 'Key_G', 'Key_GA', 'Key_A', 'Key_AB', 'Key_B')
+
+one_hot <- as.data.frame(matrix(0, nrow = nrow(spotify_cleaned), ncol = 12))
+colnames(one_hot) <- keys
+
+for (i in 1:nrow(spotify_cleaned)) {
+  one_hot[i, spotify_cleaned$key[i] + 1] <- 1 
+}
+
+
+#select relevant features
+spotify_cleaned = spotify_cleaned[, c("track_popularity", "valence", "energy", "danceability", "loudness", "speechiness", "acousticness", "instrumentalness", "liveness", "tempo", "duration_ms")]
+preProc = preProcess(spotify_cleaned, method = c("center", "scale"))
+spotify_cleaned = predict(preProc, spotify_cleaned)
+
+# combine with one hot values of key column
+spotify_cleaned <- cbind(spotify_cleaned, one_hot)
+
+# View summary of scaled data
+#knitr::kable(summary(spotify_cleaned), caption = "Summary of Scaled Dataset")
+```
+
+## Lasso Regression
+
+After normalizing all the feature values, we determine the most
+effective set of features to run regression on, using lasso regression
+to filter out features with \~0 coefficient.
+
+```{r lasso regression, echo=FALSE, message=FALSE}
+# we will first determine the optimal subset of features to use, with lasso regression
+x <- as.matrix(spotify_cleaned[, c("valence", "energy", "danceability", "loudness", "speechiness", "acousticness", "instrumentalness", "liveness", "tempo", "duration_ms", keys)])
+y <- spotify_cleaned$track_popularity
+
+set.seed(42)
+lasso_cv <- cv.glmnet(x, y, alpha = 1, family = "gaussian", nfolds = 5)
+
+cv_results <- data.frame(
+  LogLambda = log(lasso_cv$lambda),
+  MSE = lasso_cv$cvm
+)
+
+# Plot cross-validation curve
+ggplot(cv_results, aes(x = LogLambda, y = MSE)) +
+  geom_line(color = "blue", linewidth = 1) +
+  geom_point(color = "red", size = 2) +
+  geom_vline(xintercept = log(lasso_cv$lambda.min), linetype = "dashed", color = "black") +
+  labs(
+    title = "Lasso Regression Cross-Validation Curve",
+    x = "Log Lambda (Penalty Strength)",
+    y = "Mean Squared Error (MSE)"
+  ) +
+  theme_minimal()
+
+# Optimal penalty parameters
+lambda_min <- lasso_cv$lambda.min  # Lambda with minimum MSE
+lambda_df <- data.frame(
+  Metric = "Optimal Lambda (Min MSE)",
+  Value = lambda_min
+)
+
+#print optimal lambda
+knitr::kable(
+  lambda_df,
+  caption = "Optimal Lambda Value for Lasso Regression", font_size = 10, full_width = FALSE
+)
+
+# Fit the model using the optimal lambda
+lasso_model <- glmnet(x, y, alpha = 1, lambda = lambda_min)
+
+# Get coefficients of the selected features
+selected_features <- coef(lasso_model)
+selected_features <- data.frame(
+  Feature = rownames(selected_features)[-1],
+  Coefficient = as.vector(selected_features)[-1]
+)
+selected_features <- selected_features[selected_features$Coefficient != 0, ]
+
+# Print results
+knitr::kable(selected_features, caption = "Selected Features and Their Coefficients", font_size = 10, full_width = FALSE)
+
+# best combination when removing one feature or removing 2 features total
+# DECREASES linear MSE from .9464 to .928 in part 3.1
+selected_features_list <- selected_features$Feature[abs(selected_features$Coefficient) > lambda_min][-c(12,13)] 
+#selected_features_list <- c("valence", "energy", "danceability", "loudness", "speechiness", "acousticness", "instrumentalness", "liveness", "tempo", "duration_ms")
+```
+
+All 10 features here have reasonably significant coefficients, so we
+will regress on all of them.
+
+## Remove Unusual Regressors
+
+There may be data entries that cause unusually high deviation on the
+regression. We will remove them by filtering out data entries with high
+leverage scores.
+
+```{r remove unusual regressors, echo=FALSE, message=FALSE}
+# Create the regression formula
+formula <- as.formula(paste("track_popularity", "~", paste(selected_features_list, collapse = " + ")))
+
+# Fit the linear regression model
+lm_model <- lm(formula, data = spotify_cleaned)
+
+# Compute leverage scores
+leverage_scores <- hatvalues(lm_model)
+
+# Define the threshold for high leverage
+n <- nrow(spotify_cleaned)
+p <- length(selected_features_list) + 1  # Number of predictors plus intercept
+threshold <- 2 * p / n
+
+# Identify high-leverage points
+high_leverage_points <- which(leverage_scores > threshold)
+
+# Display rows removed
+removed_rows <- spotify_cleaned[high_leverage_points, ]
+
+# Print high-leverage rows as a table
+if (nrow(removed_rows) > 0) {
+  knitr::kable(
+    head(removed_rows, 5),
+    caption = "Rows Removed (High-Leverage Points)", font_size = 10, full_width = FALSE
+  )
+} else {
+  knitr::kable(
+    data.frame(Message = "No high-leverage points found"),
+    caption = "Rows Removed (High-Leverage Points)", font_size = 10, full_width = FALSE
+  )
+}
+
+# Remove high-leverage rows from the dataset
+spotify_cleaned <- spotify_cleaned[-high_leverage_points, ]
+
+# Summary of the cleaned dataset
+knitr::kable(
+  data.frame(
+    Metric = "Number of Rows Removed",
+    Value = length(high_leverage_points)
+  ),
+  caption = "Summary of Rows Removed", font_size = 10, full_width = FALSE
+)
+```
+
+This table shows the first 5 unusual regressors that we removed.
+
+# Prediction
+
+To predict a song’s popularity, we selected "popularity" as the variable
+to regress for and used multiple linear regression with features like
+energy and danceability. Our analysis showed no strong correlations
+(above 0.8) between features, ensuring they are suitable for modeling.
+We rely on assumptions such as linearity, independence, and
+homoscedasticity, which we’ll assess using diagnostic tools. By
+leveraging R for modeling and validation, we aim to create an effective
+tool for predicting song mood and enabling mood-based playlist features.
+
+## Linear Regression
+
+We first tried linear regression by splitting the overall cleaned
+dataset into a training set and testing set, and running regression on
+the training set before testing the effectiveness of that model on the
+testing set.
+
+```{r linear regression, echo=FALSE, message=FALSE}
+# select relevant target
+target = spotify_cleaned$track_popularity
+
+# Combine features and target for easier processing
+selected_features <- spotify_cleaned[, selected_features_list]
+data = cbind(selected_features, track_popularity = target)
+
+# Split the data into training and testing sets
+set.seed(42)
+trainIndex = createDataPartition(data$track_popularity, p = 0.8, list = FALSE)
+trainData =  data[trainIndex, ]
+testData =  data[-trainIndex, ]
+
+# Train the linear regression model
+model = lm(track_popularity ~ ., data = trainData)
+
+# Make predictions on the test set
+predictions = predict(model, newdata = testData)
+
+# Evaluate the model
+mse = mse(testData$track_popularity, predictions)
+r_squared = summary(model)$r.squared
+
+# Output the results
+evaluation_results <- data.frame(
+  Metric = c("Mean Squared Error (MSE)", "R-squared (R²)"),
+  Value = c(mse, r_squared)
+)
+knitr::kable(
+  evaluation_results,
+  caption = "Evaluation Metrics for Linear Regression Model", font_size = 10, full_width = FALSE
+)
+
+
+# Create a data frame for visualization
+visualization_data = data.frame(
+  Actual = testData$track_popularity,
+  Predicted = predictions,
+  Residuals = testData$track_popularity - predictions
+)
+
+# Scatter plot of Actual vs. Predicted
+actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
+  theme_minimal()
+
+# Residuals plot
+residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = "green") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  theme_minimal()
+
+grid.arrange(actualvpredplt, residualsplt, ncol = 2)
+
+#print summary
+model_summary <- as.data.frame(summary(model)$coefficients)
+knitr::kable(
+  model_summary,
+  caption = "Summary of Linear Regression Model Coefficients", font_size = 10, full_width = FALSE
+)
+```
+
+## Homoskedasticity
+
+Let's examine whether our assumption of homoskedasticity holds.
+
+```{r homoskedasticity check, echo=FALSE, message=FALSE}
+# Residuals vs Predicted Plot
+ggplot(data.frame(Predicted = predictions, Residuals = testData$track_popularity - predictions), aes(x = Predicted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Residuals vs. Predicted Values", x = "Predicted Values", y = "Residuals") +
+  theme_minimal()
+
+# Train linear regression model for homoskedasticity test
+lm_model <- lm(track_popularity ~ ., data = trainData)
+
+# Perform Breusch-Pagan Test
+bp_test <- bptest(lm_model)
+
+# print
+bp_test_results <- data.frame(
+  Statistic = round(as.numeric(bp_test$statistic), 4),
+  `Degrees of Freedom` = bp_test$parameter,
+  `P-Value` = formatC(bp_test$p.value, format = "e", digits = 2) # Scientific notation for small p-values
+)
+knitr::kable(
+  bp_test_results,
+  caption = "Breusch-Pagan Test for Homoskedasticity", font_size = 10, full_width = FALSE
+)
+```
+
+The p value is very small, so we can conclude that the residuals do not
+have constant variance, which suggests heteroskedasticity and our
+previous homoskedasticity assumption did not hold.
+
+## Multicollinearity
+
+Let's also check for any multicollinearity amongst the features.
+
+```{r multicollinearity check, echo=FALSE, message=FALSE}
+#selected_features_list <- c("valence", "energy", "danceability", "loudness", "speechiness", "acousticness", "instrumentalness", "liveness", "tempo", "duration_ms", keys)
+
+# Subset the dataset for predictors
+spotify_data_subset <- spotify_cleaned[, selected_features_list]
+
+# Compute the correlation matrix
+correlation_matrix <- cor(spotify_data_subset)
+
+#print correlation matrix
+#knitr::kable(
+#  round(correlation_matrix, 2),
+#  caption = "Correlation Matrix", font_size = 10, full_width = FALSE
+#)
+
+# Visualize the correlation matrix
+corrplot(correlation_matrix, method = "circle", type = "upper", tl.cex = 0.8)
+
+# Compute Variance Inflation Factor (VIF)
+vif_values <- vif(model)
+
+# Output VIF results
+vif_table <- data.frame(Feature = names(vif_values), VIF = round(vif_values, 2))
+knitr::kable(
+  vif_table,
+  caption = "Variance Inflation Factors (VIF)", font_size = 10, full_width = FALSE
+)
+
+# Identify high VIF features (optional)
+high_vif <- names(vif_values[vif_values > 10])
+if (length(high_vif) > 0) {
+  knitr::kable(
+    data.frame(High_VIF_Features = high_vif),
+    caption = "Features with High VIF (Multicollinearity Concern)", font_size = 10, full_width = FALSE
+  )
+} else {
+  cat("No features with VIF > 10 were found. Multicollinearity is not a concern.\n")
+}
+```
+
+No feature has VIF \> 10, therefore all the features used show low
+multicollinearity - our assumption holds here.
+
+## Random Forest Regression
+
+Since homoskedasticity does not hold, we will try a non-linear
+regression with random forest model.
+
+```{r train random forest model with cross validation, echo=FALSE, message=FALSE}
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Define cross-validation params
+train_control <- trainControl(method = "cv", number = 5, allowParallel = TRUE) # 5 fold cv
+
+# Train a Random Forest model with best features
+set.seed(42)
+cv_rf_model = train(track_popularity ~ ., data = trainData[, c(selected_features_list, "track_popularity")],
+                    method = "rf", trControl = train_control,
+                    tuneGrid = expand.grid(mtry = 2:5), ntree = 500)
+# print cv results
+knitr::kable(
+  cv_rf_model$results, 
+  caption = "Random Forest Cross-Validation Results", font_size = 10, full_width = FALSE
+)
+
+stopCluster(cl)
+registerDoSEQ()
+```
+
+### Random Forest Regression: Predictions and Evaluation
+
+Now we run prediction on the test data.
+
+```{r make prediction on test data, echo=FALSE, message=FALSE}
+# Make predictions
+rf_predictions = predict(cv_rf_model, newdata = testData[, c(selected_features_list, "track_popularity")])
+residuals = testData$track_popularity - rf_predictions
+
+# Evaluate the model
+rf_mse = mse(testData$track_popularity, rf_predictions)
+rf_r2 = 1 - (sum((testData$track_popularity - rf_predictions)^2) / sum((testData$track_popularity - mean(testData$track_popularity))^2))
+
+
+knitr::kable(
+  data.frame(
+    Metric = c("MSE", "R-squared"),
+    Value = c(rf_mse, rf_r2)
+  ), 
+  caption = "Random Forest Model Evaluation Metrics", font_size = 10, full_width = FALSE
+)
+
+# Create a data frame for visualization
+visualization_data = data.frame(
+  Actual = testData$track_popularity,
+  Predicted = rf_predictions,
+  Residuals = testData$track_popularity - rf_predictions
+)
+
+# Scatter plot of Actual vs. Predicted
+actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
+  theme_minimal()
+
+# Residuals plot
+residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = "green") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  theme_minimal()
+
+grid.arrange(actualvpredplt, residualsplt, ncol = 2)
+```
+
+The MSE is slightly higher and R\^2 value is slightly lower than with
+linear regression. This suggests a similar performance with non-linear
+regression model.
+
+## Feature Importance
+
+```{r feature importance, echo=FALSE, message=FALSE}
+importance_df <- varImp(cv_rf_model)
+
+# Print feature importance
+importance_plot_df <- importance_df$importance %>%
+  rownames_to_column(var = "Feature") %>%
+  arrange(desc(Overall))
+knitr::kable(
+  importance_plot_df,
+  caption = "Feature Importance Based on Mean Decrease in Impurity (MDI)", font_size = 10, full_width = FALSE
+)
+
+# Plot feature importance
+ggplot(importance_df, aes(x = reorder(Feature, MDI), y = MDI)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  coord_flip() +
+  labs(title = "Feature Importance (MDI)", x = "Features", y = "Mean Decrease in Impurity") +
+  theme_minimal()
+```
+
+## Optimizing Random Forest: Feature Selection and Evaluation
+
+Given these importance MDI values, we will experiment with removing the
+features with lowest MDI values and run random forest on these (each
+time removing the lowest MDI feature from the list of features used),
+attempting to achieve a lower MSE.
+
+```{r update selected features, echo=FALSE, message=FALSE}
+selected_features_list <- c("energy", "loudness", "acousticness", "tempo", "duration_ms")
+
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Define cross-validation params
+train_control <- trainControl(method = "cv", number = 5, allowParallel = TRUE) # 5 fold cv
+
+# Train a Random Forest model with best features
+set.seed(42)
+cv_rf_model = train(track_popularity ~ ., data = trainData[, c(selected_features_list, "track_popularity")],
+                    method = "rf", trControl = train_control,
+                    tuneGrid = expand.grid(mtry = 2:5), ntree = 500)
+
+stopCluster(cl)
+registerDoSEQ()
+
+knitr::kable(
+  as.data.frame(cv_rf_model$results),
+  caption = "Random Forest Cross-Validation Results", font_size = 10, full_width = FALSE
+)
+
+# Make predictions
+rf_predictions = predict(cv_rf_model, newdata = testData[, c(selected_features_list, "track_popularity")])
+residuals = testData$track_popularity - rf_predictions
+
+# Evaluate the model
+rf_mse = mse(testData$track_popularity, rf_predictions)
+rf_r2 = 1 - (sum((testData$track_popularity - rf_predictions)^2) / sum((testData$track_popularity - mean(testData$track_popularity))^2))
+
+knitr::kable(
+  data.frame(
+    Metric = c("Mean Squared Error (MSE)", "R-squared (R²)"),
+    Value = c(rf_mse, rf_r2)
+  ),
+  caption = "Random Forest Model Evaluation Metrics", font_size = 10, full_width = FALSE
+)
+
+# Create a data frame for visualization
+visualization_data = data.frame(
+  Actual = testData$track_popularity,
+  Predicted = rf_predictions,
+  Residuals = testData$track_popularity - rf_predictions
+)
+
+# Scatter plot of Actual vs. Predicted
+actualvpredplt <- ggplot(visualization_data, aes(x = Actual, y = Predicted)) +
+  geom_point(alpha = 0.6, color = "blue") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Actual vs. Predicted Valence", x = "Actual Values", y = "Predicted Values") +
+  theme_minimal()
+
+# Residuals plot
+residualsplt <- ggplot(visualization_data, aes(x = Predicted, y = Residuals)) +
+  geom_point(alpha = 0.6, color = "green") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "   Residuals Plot", x = "Predicted Values", y = "Residuals") +
+  theme_minimal()
+
+grid.arrange(actualvpredplt, residualsplt, ncol = 2)
+```
+
+Above is a snapshot of the results from using the 5 features with top
+MDI values. As we can see, the MSR is 0.988 which is actually higher
+than using all 10 features. The R\^2 value is also lower. We can
+conclude that using all 10 features achieves the best results.
+
+# Conclusion
+
+Through our regressions (linear and non-linear), we have found that the
+mean squared errors remained high (0.946 for linear regression and 0.958
+for non-linear regression) which indicated that the dataset we have
+access to is likely not effective in predicting the popularity of a
+song. Even after removing unusual regressors using leverage scores and
+selecting relevant features with lasso regression and examining the
+coefficients, the R\^2 value remained small (0.0556 for linear
+regression and 0.0405 for non-linear regression) and mean squared error
+high.
+
+After excluding the key and mode feature, because they had very
+different scale compared to the ones selected, and found no success in
+lowering the mse by a large amount, we decided to include them. These
+two features were categorical variables so instead of normalization we
+used one hot encoding. We tried different combinations by mainly
+removing a feature or a combination of two features to see if that would
+help lower our MSE values and it did. It slightly lowered original mse
+value we first got without one hot values. We found that the most
+improved mse, compared to the original, included using the one hot key
+values of Key C and Key_G♯/A♭. Our result is 0.9284 MSE and 0.0541 R\^2
+value. As for the random forest we got 0.9292 MSE and 0.0668 R\^2 value,
+slightly worse than the linear regression. We then tried multiple (more
+than two) feature combinations being removed but the linear regression
+MSE either hovered around the same value or became higher.
+
+We can note that running a linear regression performs slightly better
+than non-linear regression, both in the MSE and R\^2 values. It may be
+the case that if other more impact features are present in the dataset,
+linear regression can produce a better predictor than non-linear
+alternative.
+
+# Discussion
+
+The limitation of our dataset is that it's missing key factors that
+could have a huge impact on a song's popularity such as the artist's
+popularity, lyrical content, social and marketing trends. In addition,
+this dataset only focuses on Spotify metrics, so it might not apply to
+other music platforms. To improve future analysis, we could try adding
+data from outside sources, like marketing budget history or social media
+trends reports. Including these could make the model much more accurate
+and helpful for producers who want to plan their budgets better.
+
+Regardless of our prediction model results, the feature importance
+values from our random forest models can be useful in determining what
+features might influence the popularity of a song. From our tests, we
+found that the duration of the song, tempo, loudness, and/or energy
+might be one of those features. Producers can use this to notice trends
+at a smaller scale. For example, someone might reuse this code and
+instead use the release date data to filter out songs from a specific
+season like summer and find whether people prefer upbeat songs in the
+the summer or not. That is useful for producers looking to promote their
+songs over the summer as they see fit.
