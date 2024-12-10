@@ -46,7 +46,7 @@ be.
 
 ## Problem Description
 
-Our main question is: How can we use this Spotify data to help music
+Our main question is: How can we use this [Spotify data](https://www.kaggle.com/datasets/joebeachcapital/30000-spotify-songs) to help music
 producers allocate their marketing budget more effectively? This tool is
 important because it saves producers money and time with each of their
 newly released song.
